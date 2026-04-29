@@ -1,0 +1,58 @@
+# 均值回归策略 (Mean Reversion)
+
+## 策略说明
+均值回归策略基于"价格终将回归均值"的统计学原理。当价格偏离历史均值过多时，
+认为存在回归的动力：价格过高时做空/卖出，价格过低时做多/买入。
+该策略适用于震荡市，在强趋势市中容易产生逆势亏损。
+
+## 决策规则
+
+### 买入信号（满足以下条件时买入）
+1. {{symbol}} 当前价格 {{current_price}} 低于 {{bollinger_period}} 日布林带下轨
+2. RSI(14) 低于 {{rsi_oversold}}（超卖区域）
+3. 价格偏离 {{ma_period}} 日均线的幅度超过 {{deviation_threshold}} 个标准差
+4. 成交量出现萎缩后开始放大（量价背离修复）
+5. {{account_balance}} 充足，可覆盖预计买入金额
+
+### 卖出信号（满足以下条件时卖出）
+1. {{symbol}} 当前价格 {{current_price}} 高于 {{bollinger_period}} 日布林带上轨
+2. RSI(14) 高于 {{rsi_overbought}}（超买区域）
+3. 价格偏离 {{ma_period}} 日均线的幅度超过 {{deviation_threshold}} 个标准差
+4. 持仓盈利达到 {{take_profit_pct}}%
+
+### 持有信号
+- 价格在布林带中轨附近波动
+- RSI 在 30-70 正常区间
+- 未出现明确的超买超卖信号
+
+## 参数说明
+- {{bollinger_period}}: 布林带周期（默认20日）
+- {{bollinger_std}}: 布林带标准差倍数（默认2.0）
+- {{ma_period}}: 均值回归参考均线周期（默认20日）
+- {{deviation_threshold}}: 偏离阈值（标准差倍数，默认2.0）
+- {{rsi_period}}: RSI 周期（默认14日）
+- {{rsi_oversold}}: RSI 超卖阈值（默认30）
+- {{rsi_overbought}}: RSI 超买阈值（默认70）
+- {{stop_loss_pct}}: 止损百分比（默认3%）
+- {{take_profit_pct}}: 止盈百分比（默认3%）
+- {{symbol}}: 交易标的代码
+- {{current_price}}: 当前价格
+- {{account_balance}}: 账户余额
+
+## 风险提示
+1. 均值回归策略在强趋势中会产生严重逆势亏损，必须设置严格止损
+2. "这次不一样"——价格可能持续偏离均值，不要盲目加仓
+3. 关注基本面变化，如果标的本身逻辑发生改变，均值可能发生位移
+4. 布林带收窄后往往伴随大幅波动，需提高警惕
+5. 控制单标的仓位不超过总资金的15%
+
+## 输出要求
+请根据以上规则分析当前市场数据，输出JSON格式的交易决策：
+{
+  "action": "buy|sell|hold",
+  "symbol": "{{symbol}}",
+  "quantity": 建议数量,
+  "price": "建议价格（可选）",
+  "confidence": 0.0-1.0,
+  "reasoning": "基于均值回归策略的分析理由"
+}

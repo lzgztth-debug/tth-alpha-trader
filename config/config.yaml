@@ -1,0 +1,138 @@
+# ============================================================
+# AlphaTrader - AI 自动化交易平台 - 配置文件
+# ============================================================
+
+app_name: "AlphaTrader"
+app_version: "5.0.0"
+debug: false
+
+# ---- 数据库配置 ----
+database:
+  url: "sqlite+aiosqlite:///./data/trading.db"
+  echo: false
+  pool_size: 10
+  max_overflow: 20
+  connect_timeout: 30
+
+# ---- Redis配置 ----
+redis:
+  url: "redis://localhost:6379/0"
+  password: null
+  db: 0
+  max_connections: 20
+  socket_timeout: 5
+  enabled: false
+
+# ---- AI模型配置 ----
+ai:
+  default_provider: "openai"
+  retry_max_attempts: 3
+  retry_delay: 1.0
+  openai:
+    api_key: null
+    base_url: "https://api.openai.com/v1"
+    model: "gpt-4o"
+    temperature: 0.7
+    max_tokens: 4096
+    timeout: 60
+  anthropic:
+    api_key: null
+    model: "claude-3-5-sonnet-20241022"
+    temperature: 0.7
+    max_tokens: 4096
+    timeout: 60
+  dashscope:
+    api_key: null
+    model: "qwen-max"
+    temperature: 0.7
+    max_tokens: 4096
+    timeout: 60
+  seed:
+    api_key: null
+    base_url: "https://ark.cn-beijing.volces.com/api/v3"
+    model: "doubao-pro-32k"
+    temperature: 0.7
+    max_tokens: 4096
+    timeout: 60
+  minimax:
+    api_key: null
+    base_url: "https://api.minimax.chat/v1"
+    model: "abab6.5s-chat"
+    temperature: 0.7
+    max_tokens: 4096
+    timeout: 60
+  siliconflow:
+    api_key: null
+    base_url: "https://api.siliconflow.cn/v1"
+    model: "Qwen/Qwen2.5-7B-Instruct"
+    temperature: 0.7
+    max_tokens: 4096
+    timeout: 60
+  zhipu:
+    api_key: null
+    base_url: "https://open.bigmodel.cn/api/paas/v4"
+    model: "glm-4"
+    temperature: 0.7
+    max_tokens: 4096
+    timeout: 60
+  qianfan:
+    api_key: null
+    secret_key: null
+    base_url: "https://aip.baidubce.com"
+    model: "ernie-bot-4"
+    temperature: 0.7
+    max_tokens: 4096
+    timeout: 60
+  moonshot:
+    api_key: null
+    base_url: "https://api.moonshot.cn/v1"
+    model: "moonshot-v1-8k"
+    temperature: 0.7
+    max_tokens: 4096
+    timeout: 60
+
+# ---- 券商配置 ----
+broker:
+  default_broker: "simulated"
+  api_key: null
+  api_secret: null
+  passphrase: null
+  base_url: null
+  sandbox: true
+  rate_limit_per_second: 10
+
+# ---- 交易模式配置 ----
+trading:
+  mode: "paper"                # paper | live | backtest
+  max_position_size: 10000.0
+  max_daily_trades: 50
+  max_drawdown_pct: 5.0
+  stop_loss_pct: 2.0
+  take_profit_pct: 5.0
+  risk_per_trade_pct: 1.0
+  allowed_symbols: []
+  trading_hours_start: "09:30"
+  trading_hours_end: "15:00"
+  timezone: "Asia/Shanghai"
+
+# ---- 日志配置 ----
+log:
+  level: "INFO"
+  log_dir: "./logs"
+  log_file: "trading.log"
+  rotation: "00:00"
+  retention: "30 days"
+  console_output: true
+  file_output: true
+
+# ---- API服务配置 ----
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 1
+  cors_origins:
+    - "http://localhost:8501"
+    - "http://localhost:3000"
+    - "http://localhost:5173"
+  api_key_enabled: true
+  api_key: null
