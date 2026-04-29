@@ -3,6 +3,12 @@
 提供AI决策的核心能力，包括Prompt管理、上下文构建、决策解析和多模型并行调用。
 """
 
+import sys
+from pathlib import Path
+_backend_root = str(Path(__file__).resolve().parent.parent.parent)
+if _backend_root not in sys.path:
+    sys.path.insert(0, _backend_root)
+
 from __future__ import annotations
 
 import asyncio

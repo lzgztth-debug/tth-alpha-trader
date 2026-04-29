@@ -4,8 +4,10 @@
 """
 
 import os
+import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -27,6 +29,39 @@ from src.adapters.ai_models import ADAPTER_MAP
 from src.adapters.ai_models.base import ModelConfig, ModelProvider
 from src.database.connection import close_db, init_db
 from src.utils.config import get_settings
+
+
+# ---------------------------------------------------------------------------
+# API 限流器
+# ---------------------------------------------------------------------------
+
+class RateLimiter:
+    """基于滑动窗口的内存限流器"""
+
+    def __init__(self) -> None:
+        self._requests: Dict[str, List[float]] = defaultdict(list)
+
+    def is_allowed(self, key: str, max_requests: int, window_seconds: int) -> bool:
+        """检查请求是否允许通过。
+
+        Args:
+            key:            限流键 (如客户端IP)。
+            max_requests:   窗口内最大请求数。
+            window_seconds: 滑动窗口时长 (秒)。
+
+        Returns:
+            True 表示允许，False 表示被限流。
+        """
+        now = time.time()
+        cutoff = now - window_seconds
+        self._requests[key] = [t for t in self._requests[key] if t > cutoff]
+        if len(self._requests[key]) >= max_requests:
+            return False
+        self._requests[key].append(now)
+        return True
+
+
+rate_limiter = RateLimiter()
 
 
 # ---------------------------------------------------------------------------
@@ -74,22 +109,28 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "ollama": None,
         }
 
+        registered_count = 0
+        failed_count = 0
+        failed_providers: list[str] = []
+
         for provider_name, adapter_cls in ADAPTER_MAP.items():
-            provider_settings = provider_settings_map.get(provider_name)
-            if provider_settings is None:
-                continue
-
-            api_key = getattr(provider_settings, "api_key", None)
-            if not api_key:
-                continue
-
-            model_name = getattr(provider_settings, "model", "")
-            base_url = getattr(provider_settings, "base_url", None)
-            temperature = getattr(provider_settings, "temperature", 0.7)
-            max_tokens = getattr(provider_settings, "max_tokens", 4096)
-            timeout = getattr(provider_settings, "timeout", 60)
-
             try:
+                provider_settings = provider_settings_map.get(provider_name)
+                if provider_settings is None:
+                    logger.debug(f"跳过 {provider_name}: 无配置节")
+                    continue
+
+                api_key = getattr(provider_settings, "api_key", None)
+                if not api_key:
+                    logger.debug(f"跳过 {provider_name}: 未配置 API Key")
+                    continue
+
+                model_name = getattr(provider_settings, "model", "")
+                base_url = getattr(provider_settings, "base_url", None)
+                temperature = getattr(provider_settings, "temperature", 0.7)
+                max_tokens = getattr(provider_settings, "max_tokens", 4096)
+                timeout = getattr(provider_settings, "timeout", 60)
+
                 model_config = ModelConfig(
                     provider=ModelProvider(provider_name),
                     model_name=model_name,
@@ -100,13 +141,30 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     timeout=timeout,
                 )
                 adapter = adapter_cls(model_config)
-                app.state.agent_engine.register_model(provider_name, adapter)
-                logger.info(f"AI 模型已注册: {provider_name} ({model_name})")
-            except Exception as e:
-                logger.warning(f"注册 AI 模型失败: {provider_name}, 错误: {e}")
 
-        registered = app.state.agent_engine.list_models()
-        logger.info(f"AI 模型注册完成, 已注册: {[m['name'] for m in registered]}")
+                if not adapter.is_available():
+                    logger.warning(f"✗ {provider_name}: 适配器不可用")
+                    failed_count += 1
+                    failed_providers.append(provider_name)
+                    continue
+
+                app.state.agent_engine.register_model(provider_name, adapter)
+                registered_count += 1
+                logger.info(f"✓ AI 模型已注册: {provider_name} ({model_name})")
+
+            except ImportError as e:
+                logger.error(f"✗ {provider_name}: 依赖缺失 - {e}")
+                failed_count += 1
+                failed_providers.append(provider_name)
+            except Exception as e:
+                logger.error(f"✗ {provider_name}: 注册失败 - {e}")
+                failed_count += 1
+                failed_providers.append(provider_name)
+
+        logger.info(
+            f"AI 模型注册完成: {registered_count} 成功, "
+            f"{failed_count} 失败 {f'({failed_providers})' if failed_providers else ''}"
+        )
 
     except Exception as e:
         logger.warning(f"AI 模型自动注册失败: {e}")
@@ -164,11 +222,15 @@ def create_app() -> FastAPI:
     # ------------------------------------------------------------------
     # CORS 中间件
     # ------------------------------------------------------------------
-    if settings.debug:
-        # 调试模式: 允许所有来源，方便本地开发
+    # CORS: 环境变量 > settings配置 > 默认值
+    cors_env = os.getenv("CORS_ALLOWED_ORIGINS", "")
+    if cors_env:
+        cors_origins = [o.strip() for o in cors_env.split(",") if o.strip()]
+    elif settings.api.cors_origins:
+        cors_origins = settings.api.cors_origins
+    elif settings.debug:
         cors_origins = ["*"]
     else:
-        # 生产模式: 仅允许前端域名
         cors_origins = ["http://localhost:3000"]
 
     app.add_middleware(
@@ -178,6 +240,46 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # ------------------------------------------------------------------
+    # API 限流中间件
+    # ------------------------------------------------------------------
+    rate_limit_enabled = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
+
+    @app.middleware("http")
+    async def rate_limit_middleware(request: Request, call_next):
+        """基于滑动窗口的 API 限流中间件。"""
+        if not rate_limit_enabled:
+            return await call_next(request)
+
+        path = request.url.path
+
+        # AI decide 端点: 10 请求/分钟
+        if "/api/v1/ai/decide" in path:
+            max_requests = 10
+            window_seconds = 60
+        # 其他 API 端点: 60 请求/分钟
+        elif path.startswith("/api/"):
+            max_requests = 60
+            window_seconds = 60
+        else:
+            # 非 API 端点不限流
+            return await call_next(request)
+
+        client_key = request.client.host if request.client else "unknown"
+        full_key = f"{client_key}:{path}"
+
+        if not rate_limiter.is_allowed(full_key, max_requests, window_seconds):
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content={
+                    "success": False,
+                    "error": "请求过于频繁，请稍后重试",
+                },
+                headers={"Retry-After": str(window_seconds)},
+            )
+
+        return await call_next(request)
 
     # ------------------------------------------------------------------
     # 注册路由

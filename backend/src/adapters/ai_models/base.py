@@ -28,28 +28,48 @@ class ModelProvider(Enum):
 
 # ---------------------------------------------------------------------------
 # 各模型定价 (每百万 token, USD)
+# 数据来源: 各厂商官方定价页面
+# 最后更新: 2026-04
 # ---------------------------------------------------------------------------
 
 MODEL_PRICING: Dict[str, Dict[str, float]] = {
-    # OpenAI
+    # OpenAI (最后更新: 2026-04)
     "gpt-4o": {"input": 2.5, "output": 10.0},
     "gpt-4o-mini": {"input": 0.15, "output": 0.6},
     "gpt-4-turbo": {"input": 10.0, "output": 30.0},
-    "gpt-4": {"input": 30.0, "output": 60.0},
     "gpt-3.5-turbo": {"input": 0.5, "output": 1.5},
-    # Claude
+    # Anthropic (最后更新: 2026-04)
     "claude-sonnet-4-20250514": {"input": 3.0, "output": 15.0},
     "claude-3-5-sonnet-20241022": {"input": 3.0, "output": 15.0},
     "claude-3-opus-20240229": {"input": 15.0, "output": 75.0},
     "claude-3-haiku-20240307": {"input": 0.25, "output": 1.25},
-    # DeepSeek
-    "deepseek-chat": {"input": 0.14, "output": 0.28},
-    "deepseek-reasoner": {"input": 0.55, "output": 2.19},
-    # Qwen
+    # DeepSeek (最后更新: 2026-04)
+    "deepseek-chat": {"input": 1.0, "output": 2.0},
+    "deepseek-reasoner": {"input": 4.0, "output": 16.0},
+    # Seed/豆包 (最后更新: 2026-04)
+    "doubao-1-5-pro-256k": {"input": 0.8, "output": 2.0},
+    "doubao-1-5-pro-32k": {"input": 0.8, "output": 2.0},
+    "doubao-1-5-lite-32k": {"input": 0.3, "output": 0.6},
+    # MiniMax (最后更新: 2026-04)
+    "MiniMax-M2.5": {"input": 1.0, "output": 1.0},
+    "MiniMax-M1": {"input": 0.1, "output": 0.1},
+    # Qwen/通义千问 (最后更新: 2026-04)
     "qwen-max": {"input": 1.6, "output": 4.8},
     "qwen-plus": {"input": 0.8, "output": 2.0},
     "qwen-turbo": {"input": 0.3, "output": 0.6},
-    # 默认
+    # 硅基流动 (最后更新: 2026-04)
+    "Qwen/Qwen2.5-7B-Instruct": {"input": 0.0, "output": 0.0},  # 免费层
+    # 智谱GLM (最后更新: 2026-04)
+    "glm-4-flash": {"input": 0.1, "output": 0.1},
+    "glm-4-plus": {"input": 0.5, "output": 0.5},
+    # 百度千帆 (最后更新: 2026-04)
+    "ernie-4.0-8k-latest": {"input": 4.0, "output": 8.0},
+    # 月之暗面 (最后更新: 2026-04)
+    "moonshot-v1-8k": {"input": 1.2, "output": 1.2},
+    "moonshot-v1-32k": {"input": 2.4, "output": 2.4},
+    # Ollama (本地免费)
+    "llama3": {"input": 0.0, "output": 0.0},
+    # 默认定价
     "default": {"input": 1.0, "output": 3.0},
 }
 
@@ -336,9 +356,12 @@ class OpenAICompatibleAdapter(BaseAIModelAdapter):
                 f"base_url={self.config.base_url}"
             )
 
-        except ImportError:
+        except ImportError as e:
+            import traceback
             raise AIModelConnectionError(
-                "openai SDK 未安装，请执行: pip install openai",
+                f"openai SDK 导入失败，请执行: pip install openai\n"
+                f"原始错误: {e}\n"
+                f"详细信息:\n{traceback.format_exc()}",
                 provider=self.PROVIDER_NAME
             )
         except Exception as e:

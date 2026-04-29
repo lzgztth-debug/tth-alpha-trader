@@ -284,7 +284,7 @@ class Settings(BaseSettings):
     """全局应用配置 - 聚合所有子配置"""
 
     app_name: str = Field(default="AI Trading Platform", alias="APP_NAME")
-    app_version: str = Field(default="0.1.0", alias="APP_VERSION")
+    app_version: str = Field(default="6.0.0", alias="APP_VERSION")
     debug: bool = Field(default=False, alias="DEBUG")
     config_path: Optional[str] = Field(default=None, alias="CONFIG_PATH")
 

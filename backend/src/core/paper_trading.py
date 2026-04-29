@@ -4,8 +4,15 @@
 支持多账户管理和数据库持久化。
 """
 
+import sys
+from pathlib import Path
+_backend_root = str(Path(__file__).resolve().parent.parent.parent)
+if _backend_root not in sys.path:
+    sys.path.insert(0, _backend_root)
+
 from __future__ import annotations
 
+import asyncio
 import json
 import random
 import uuid
@@ -30,6 +37,9 @@ from src.models.position import Position
 # ===========================================================================
 # 模拟交易配置
 # ===========================================================================
+
+# 浮点精度阈值：低于此值视为零
+POSITION_EPSILON: float = 1e-8
 
 
 @dataclass
@@ -125,6 +135,18 @@ class PaperTradingEngine:
     - 数据持久化到JSON文件
     """
 
+    @staticmethod
+    def _is_zero(qty: float) -> bool:
+        """判断数量是否为零 (低于浮点精度阈值)。"""
+        return abs(qty) < POSITION_EPSILON
+
+    @staticmethod
+    def _round_quantity(qty: float) -> float:
+        """四舍五入数量：接近零时返回 0.0，否则保留4位小数。"""
+        if abs(qty) < POSITION_EPSILON:
+            return 0.0
+        return round(qty, 4)
+
     def __init__(
         self,
         config: Optional[PaperTradingConfig] = None,
@@ -138,6 +160,7 @@ class PaperTradingEngine:
             data_dir: 数据持久化目录，None则使用默认目录。
         """
         self._config = config or PaperTradingConfig()
+        self._lock = asyncio.Lock()
 
         if data_dir is None:
             data_dir = str(
@@ -341,7 +364,7 @@ class PaperTradingEngine:
     # 订单管理
     # ------------------------------------------------------------------
 
-    def place_order(
+    async def place_order(
         self,
         account_id: str,
         symbol: str,
@@ -437,7 +460,7 @@ class PaperTradingEngine:
         # 市价单自动撮合
         if order_type == OrderType.MARKET and self._config.auto_fill_market_orders:
             if market_price > 0:
-                self._try_match_order(order_id, market_price)
+                await self._try_match_order(order_id, market_price)
 
         return order
 
@@ -517,7 +540,7 @@ class PaperTradingEngine:
     # 市场价格更新
     # ------------------------------------------------------------------
 
-    def update_market_prices(self, prices: Dict[str, float]) -> int:
+    async def update_market_prices(self, prices: Dict[str, float]) -> int:
         """更新市场价格并尝试撮合挂单。
 
         Args:
@@ -538,7 +561,7 @@ class PaperTradingEngine:
                 self._update_position_prices(symbol, price)
 
                 # 尝试撮合挂单
-                self._match_orders_for_symbol(symbol, price)
+                await self._match_orders_for_symbol(symbol, price)
 
         if updated_count > 0:
             logger.debug("市场价格已更新: count={}", updated_count)
@@ -849,7 +872,7 @@ class PaperTradingEngine:
     # 内部方法 - 订单撮合
     # ------------------------------------------------------------------
 
-    def _try_match_order(
+    async def _try_match_order(
         self, order_id: str, market_price: float
     ) -> Optional[Order]:
         """尝试撮合订单。
@@ -870,18 +893,18 @@ class PaperTradingEngine:
 
         if order.order_type == OrderType.MARKET:
             # 市价单直接以市场价撮合
-            return self._execute_fill(order, market_price)
+            return await self._execute_fill_safe(order, market_price)
 
         elif order.order_type == OrderType.LIMIT and order.price is not None:
             # 限价单检查价格
             if order.side == OrderSide.BUY:
                 # 买入限价单: 市场价 <= 委托价 时成交
                 if market_price <= order.price * (1 + self._config.limit_order_price_tolerance):
-                    return self._execute_fill(order, market_price)
+                    return await self._execute_fill_safe(order, market_price)
             elif order.side == OrderSide.SELL:
                 # 卖出限价单: 市场价 >= 委托价 时成交
                 if market_price >= order.price * (1 - self._config.limit_order_price_tolerance):
-                    return self._execute_fill(order, market_price)
+                    return await self._execute_fill_safe(order, market_price)
 
         return None
 
@@ -986,7 +1009,25 @@ class PaperTradingEngine:
 
         return order
 
-    def _match_orders_for_symbol(self, symbol: str, price: float) -> int:
+    async def _execute_fill_safe(
+        self, order: Order, market_price: float
+    ) -> Order:
+        """带并发保护的订单成交执行。
+
+        使用 asyncio.Lock 确保 _execute_fill 在并发场景下不会被
+        同时调用，避免持仓和资金数据出现竞态条件。
+
+        Args:
+            order:       订单。
+            market_price: 市场价格。
+
+        Returns:
+            更新后的订单。
+        """
+        async with self._lock:
+            return self._execute_fill(order, market_price)
+
+    async def _match_orders_for_symbol(self, symbol: str, price: float) -> int:
         """对指定标的的所有挂单尝试撮合。
 
         Args:
@@ -1002,7 +1043,7 @@ class PaperTradingEngine:
                 continue
             if order.status not in (OrderStatus.PENDING, OrderStatus.PARTIAL_FILLED):
                 continue
-            result = self._try_match_order(oid, price)
+            result = await self._try_match_order(oid, price)
             if result is not None:
                 matched += 1
         return matched
@@ -1029,7 +1070,7 @@ class PaperTradingEngine:
                 (existing.avg_cost * existing.quantity + price * quantity)
                 / new_qty
             )
-            existing.quantity = round(new_qty, 4)
+            existing.quantity = self._round_quantity(new_qty)
             existing.avg_cost = round(new_avg, 4)
             existing.current_price = price
             existing.market_value = round(new_qty * price, 2)
@@ -1076,14 +1117,14 @@ class PaperTradingEngine:
         new_qty = existing.quantity - quantity
         now = datetime.now()
 
-        if new_qty < 1e-8:
+        if self._is_zero(new_qty):
             existing.quantity = 0.0
             existing.market_value = 0.0
             existing.unrealized_pnl = 0.0
             existing.unrealized_pnl_pct = 0.0
             existing.updated_at = now
         else:
-            existing.quantity = round(new_qty, 4)
+            existing.quantity = self._round_quantity(new_qty)
             existing.current_price = price
             existing.market_value = round(new_qty * price, 2)
             existing.unrealized_pnl = round(

@@ -4,8 +4,10 @@
 - POST   /api/v1/ai/decide          - 单模型决策
 - POST   /api/v1/ai/decide/multi     - 多模型投票决策
 - POST   /api/v1/ai/decide/stream    - SSE 流式多模型决策
+- GET    /api/v1/ai/decisions/{decision_id}/reasoning - 决策推理详情
 - GET    /api/v1/ai/models           - 列出已注册模型
 - GET    /api/v1/ai/providers        - 列出支持的提供商
+- GET    /api/v1/ai/pricing          - 模型定价表
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -61,6 +63,23 @@ class ModelInfoResponse(BaseModel):
 class ProviderInfoResponse(BaseModel):
     """提供商信息响应"""
     providers: List[Dict[str, Any]] = Field(default_factory=list, description="提供商列表")
+
+
+class DecisionReasoningResponse(BaseModel):
+    """决策推理详情响应"""
+    decision_id: str = Field(..., description="决策唯一标识")
+    reasoning: Optional[str] = Field(default=None, description="决策推理过程")
+    prompt: Optional[str] = Field(default=None, description="发送的Prompt")
+    raw_response: Optional[str] = Field(default=None, description="模型原始输出")
+    market_context: Optional[str] = Field(default=None, description="市场快照JSON")
+    created_at: Optional[str] = Field(default=None, description="创建时间")
+
+
+class PricingResponse(BaseModel):
+    """模型定价响应"""
+    pricing: Dict[str, Dict[str, float]] = Field(
+        default_factory=dict, description="模型定价表 (每百万token, USD)"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -277,3 +296,71 @@ async def list_providers() -> ProviderInfoResponse:
         for p in ModelProvider
     ]
     return ProviderInfoResponse(providers=providers)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/ai/decisions/{decision_id}/reasoning - 决策推理详情
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/decisions/{decision_id}/reasoning",
+    response_model=DecisionReasoningResponse,
+    summary="获取决策推理详情",
+    description="根据 decision_id 查询决策日志，返回完整的推理过程。",
+)
+async def get_decision_reasoning(
+    decision_id: str,
+) -> DecisionReasoningResponse:
+    """获取决策推理详情。"""
+    from src.database.connection import get_async_session
+    from src.database.repositories.log_repo import DecisionLogRepository
+
+    try:
+        async with get_async_session() as session:
+            repo = DecisionLogRepository(session)
+            orm = await repo.get_decision_log(decision_id)
+
+        if orm is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "success": False,
+                    "error": f"决策不存在: {decision_id}",
+                },
+            )
+
+        return DecisionReasoningResponse(
+            decision_id=orm.decision_id,
+            reasoning=orm.reasoning,
+            prompt=orm.prompt,
+            raw_response=orm.raw_response,
+            market_context=orm.market_context,
+            created_at=orm.created_at.isoformat() if orm.created_at else None,
+        )
+
+    except Exception as e:
+        logger.error(f"查询决策推理详情失败: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": f"查询失败: {str(e)}",
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/ai/pricing - 模型定价表
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/pricing",
+    response_model=PricingResponse,
+    summary="获取模型定价表",
+    description="返回所有支持的 AI 模型定价信息 (每百万token, USD)。",
+)
+async def get_pricing() -> PricingResponse:
+    """获取模型定价表。"""
+    from src.adapters.ai_models.base import MODEL_PRICING
+
+    return PricingResponse(pricing=MODEL_PRICING)

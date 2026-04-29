@@ -3,6 +3,12 @@
 提供发布-订阅模式的事件系统，支持异步事件处理、事件优先级和事件历史记录。
 """
 
+import sys
+from pathlib import Path
+_backend_root = str(Path(__file__).resolve().parent.parent.parent)
+if _backend_root not in sys.path:
+    sys.path.insert(0, _backend_root)
+
 from __future__ import annotations
 
 import asyncio

@@ -14,6 +14,7 @@
 """
 
 from datetime import datetime
+from typing import Any, Dict
 
 from sqlalchemy import (
     Boolean,
@@ -80,6 +81,63 @@ class AccountORM(Base, TimestampMixin):
         Index("idx_accounts_broker", "broker"),
         Index("idx_accounts_type", "account_type"),
     )
+
+    # ------------------------------------------------------------------
+    # 一致性契约
+    # ------------------------------------------------------------------
+    # 账户资产一致性规则:
+    #   total_value == cash + market_value
+    #
+    # market_value 表示当前所有持仓的市值总和，由持仓模块在每次
+    # 成交或价格更新后同步计算。cash 表示账户可用现金余额。
+    # total_value 是两者之和，代表账户总资产。
+    #
+    # 在更新账户数据时，应始终通过 recalculate_market_value() 或
+    # validate_account_consistency() 来保证一致性。
+    # ------------------------------------------------------------------
+
+    def recalculate_market_value(self) -> float:
+        """根据 total_value 和 cash 重新计算 market_value。
+
+        一致性公式: market_value = total_value - cash
+
+        Returns:
+            重新计算后的 market_value。
+        """
+        self.market_value = max(self.total_value - self.cash, 0.0)
+        return self.market_value
+
+    @staticmethod
+    def validate_account_consistency(
+        total_value: float,
+        cash: float,
+        market_value: float,
+        tolerance: float = 0.01,
+    ) -> Dict[str, Any]:
+        """验证账户资产一致性。
+
+        检查 total_value == cash + market_value 是否成立。
+
+        Args:
+            total_value:  总资产。
+            cash:         现金余额。
+            market_value: 持仓市值。
+            tolerance:    允许的浮点误差 (默认 0.01)。
+
+        Returns:
+            包含 is_consistent, expected_market_value, diff 的字典。
+        """
+        expected = cash + market_value
+        diff = abs(total_value - expected)
+        return {
+            "is_consistent": diff <= tolerance,
+            "total_value": total_value,
+            "cash": cash,
+            "market_value": market_value,
+            "expected_total": expected,
+            "diff": round(diff, 4),
+            "tolerance": tolerance,
+        }
 
 
 # ---------------------------------------------------------------------------
